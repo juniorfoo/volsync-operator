@@ -1,0 +1,150 @@
+name: Build, test, and deploy to Docker Hub
+
+env:
+  # This forces the python/requests library to use the system CA bundle, which is where we added our self-signed CA
+  REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
+
+on:
+  # Pushes and tags trigger the full workflow
+  push:
+    branches:
+      - 'master'
+    tags:
+      - 'v*'
+  # Pull requests only trigger the unit tests
+  pull_request:
+    branches:
+      - 'master'
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the code
+        uses: actions/checkout@v4
+
+      ##################   Setup the Kubernetes cluster for testing   ##################
+      - name: Spin up a k8s cluster
+        uses: helm/kind-action@v1
+        with:
+          config: tests/kind-config.yaml
+          cluster_name: kanidm-operator
+      - name: Install an ingress controller, so we can test that functionality of the operator
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/component=controller -n ingress-nginx --timeout=90s
+      - name: Redirect the idm.example.com hostname to the ingress controller, so the operator can access it as normal without a real DNS entry
+        run: |
+          INGRESS_IP=$(docker container inspect kanidm-operator-control-plane --format '{{ .NetworkSettings.Networks.kind.IPAddress }}')
+          echo "Pod IP is $INGRESS_IP"
+          sudo echo "$INGRESS_IP idm.example.com" | sudo tee -a /etc/hosts
+          cat /etc/hosts
+      - name: Install cert-manager, so we can issue a TLS certificate for kanidm
+        run: |
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.5/cert-manager.yaml
+          kubectl wait --for=condition=Available deployment cert-manager-webhook -n cert-manager --timeout=90s
+      - name: Create a Certificate Authority that we install to the system for "trusted" SSL communications
+        run: |
+          sudo apt-get install -y openssl ca-certificates
+          openssl genrsa -out KanidmCA.key 4096 
+          openssl req -x509 -new -nodes -key KanidmCA.key -sha256 -days 1826 -out KanidmCA.crt -subj '/CN=KanidmRoot CA/C=AT/ST=Vienna/L=Vienna/O=Kanidm'
+          kubectl create secret -n cert-manager tls kanidm-ca --cert=KanidmCA.crt --key=KanidmCA.key
+          sudo cp KanidmCA.crt /usr/local/share/ca-certificates/KanidmCA.crt
+          sudo update-ca-certificates --fresh
+      - name: Install the self-signed cluster certificate issuer to fake a letsencrypt production setup
+        run: |
+          kubectl apply -f tests/cluster-issuer.yaml
+
+      ##################   Setup the Python environment for testing   ##################
+      - name: Setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Install poetry
+        run: |
+          pip install poetry
+      - name: Set poetry environment
+        run: |
+          poetry env use 3.11
+      - name: Install the operator python dependencies
+        run: poetry install --no-root
+      ####  Here's an install of kanidm tools from cargo, but its waayyy too slow (3m30)
+      #- name: Setup rust to install kanidm CLI for the operator
+      #  uses: hecrj/setup-rust-action@v2
+      #- name: Install dependencies for kanidm CLI tool
+      #  run: sudo apt-get install libudev-dev
+      #- name: Install kanidm cli tool for use by the operator
+      #  run: |
+      #    cargo install kanidm_tools@=1.2.2
+      #### Much faster install, but they haven't got stable releases yet so may cause an issue
+      - name: Install kanidm from the PPA
+        run: |
+          # Install the key
+          curl -s --compressed "https://kanidm.github.io/kanidm_ppa/KEY.gpg" \
+            | gpg --dearmor \
+            | sudo tee /etc/apt/trusted.gpg.d/kanidm_ppa.gpg >/dev/null
+          
+          # Add the PPA
+          curl -s --compressed "https://kanidm.github.io/kanidm_ppa/kanidm_ppa.list" \
+            | grep $( ( . /etc/os-release && echo $ID) ) \
+            | sudo tee /etc/apt/sources.list.d/kanidm_ppa.list
+
+          # Install the package
+          sudo apt-get update
+          sudo apt-get install kanidm
+
+      ##################   Run the tests   ##################
+      - name: Run the automated tests
+        run: poetry run pytest -v
+
+      ################# Gather debug information about the state of the k8s cluster ###################
+      - name: Describe the state of the k8s cluster
+        if: always()
+        run: |
+          echo "### NODES"
+          kubectl get -A nodes
+          echo "### DEPLOYMENTS"
+          kubectl get -A deployment
+          echo "### PODS"
+          kubectl get -A pods
+          echo "### SERVICES"
+          kubectl get -A service
+          echo "### INGRESSES"
+          kubectl get -A ingress
+          echo "### CLUSTER ISSUERS"
+          kubectl get -A clusterissuer
+          echo "### CERTIFICATES"
+          kubectl get -A certificate
+          echo "### SECRETS"
+          kubectl get -A secret
+
+          echo "### ### ### ### ### ### "
+
+          echo "### KANIDM CRD"
+          kubectl describe -A kanidm
+          echo "### KANIDM USER CRD"
+          kubectl describe -A user
+          echo "### KANIDM GROUP CRD"
+          kubectl describe -A group
+          echo "### KANIDM OAUTH2 CRD"
+          kubectl describe -A oauth2-clients
+  deploy:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract metadata (tags, labels) for docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ github.repository }} # this will be juniorfoo/kanidm-operator
+      - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'      
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          push: ${{ github.event_name != 'pull_request' }} # Don't push images for pull requests
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

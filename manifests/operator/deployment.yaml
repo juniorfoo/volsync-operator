@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: volsync-operator
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: volsync-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: volsync-operator
+    spec:
+      serviceAccountName: volsync-operator-account
+      containers:
+      - name: volsync-operator
+        image: volsync-operator
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: 100m
+            memory: 1024Mi
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        livenessProbe:
+          initialDelaySeconds: 60 #poetry and kopf together take a long time to initialise
+          httpGet:
+            path: /healthz
+            port: 8080        
+        args:
+          - --liveness=http://0.0.0.0:8080/healthz
+          - --standalone
+          - --all-namespaces
+          - --module
+          - volsync_operator
+        # volumeMounts:
+        # - name: kopf-state
+        #   persistentVolumeClaim:
+        #     claimName: kopf-state

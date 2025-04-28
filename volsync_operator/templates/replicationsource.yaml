@@ -1,0 +1,34 @@
+---
+apiVersion: volsync.backube/v1alpha1
+kind: ReplicationSource
+metadata:
+  name: {{ name | slugify }}-backup
+  namespace: {{ namespace }}
+  labels:
+    app.kubernetes.io/name: volsync
+    app.kubernetes.io/instance: volsync
+    app.kubernetes.io/managed-by: volsync-operator
+    app.kubernetes.io/component: credentials
+    app.kubernetes.io/part-of: volsync
+    app.kubernetes.io/created-by: volsync-operator
+spec:
+  # The PVC to be backed up
+  sourcePVC: {{ name }}
+  trigger:
+    # Take a backup every 30 minutes
+    schedule: "*/30 * * * *"
+  restic:
+    # Prune the repository (repack to free space) every 2 weeks
+    pruneIntervalDays: 14
+    # Name of the Secret with the connection information
+    repository: volsync-restic-{{ name | slugify }}-secrets
+    # Retention policy for backups
+    retain:
+      hourly: 6
+      daily: 5
+      weekly: 4
+      monthly: 2
+      yearly: 1
+    # Clone the source volume prior to taking a backup to ensure a
+    # point-in-time image.
+    copyMethod: Clone

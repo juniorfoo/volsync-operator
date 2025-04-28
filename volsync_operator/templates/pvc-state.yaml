@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kopf-state
+  namespace: {{ namespace }}
+  labels:
+    app.kubernetes.io/name: volsync
+    app.kubernetes.io/instance: volsync
+    app.kubernetes.io/managed-by: volsync-operator
+    app.kubernetes.io/component: credentials
+    app.kubernetes.io/part-of: volsync
+    app.kubernetes.io/created-by: volsync-operator
+spec:
+  storageClassName: {{ backup_storage_class }}
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ backup_storage_size }}
