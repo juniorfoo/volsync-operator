@@ -33,6 +33,7 @@ spec:
             port: 8080        
         args:
           - --liveness=http://0.0.0.0:8080/healthz
+          - --verbose
           - --standalone
           - --all-namespaces
           - --module
