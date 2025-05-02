@@ -1,0 +1,19 @@
+---
+# yamllint disable rule:line-length
+version: '3'
+
+vars:
+  VERSION:
+    sh: sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml
+
+tasks:
+  default:
+    silent: true
+    desc: List all tasks
+    cmds:
+      - task --list-all
+
+  docker:
+    desc: Build and push the docker image for our chart
+    cmds:
+      - docker buildx build --platform linux/amd64,linux/arm64 -t juniorfoo/volsync-operator:latest -t juniorfoo/volsync-operator:{{.VERSION}} . --push
