@@ -16,7 +16,7 @@ spec:
   sourcePVC: {{ name }}
   trigger:
     # Take a backup every 30 minutes
-    schedule: "*/30 * * * *"
+    schedule: "0 0 * * *"
   restic:
     # Prune the repository (repack to free space) every 2 weeks
     pruneIntervalDays: 14
@@ -29,6 +29,6 @@ spec:
       weekly: 4
       monthly: 2
       yearly: 1
-    # Clone the source volume prior to taking a backup to ensure a
+    # Snapshot the source volume prior to taking a backup to ensure a
     # point-in-time image.
-    copyMethod: Clone
+    copyMethod: Snapshot
